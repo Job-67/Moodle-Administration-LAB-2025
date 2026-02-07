@@ -936,29 +936,70 @@ docker exec -i moodle_db mysql -u moodleuser -pmoodlepassword moodle < backup_20
 
 คำตอบ:
 ```
+Docker Image เปรียบเหมือน "แม่พิมพ์" หรือ "สูตรอาหาร" เป็นไฟล์ที่อ่านได้อย่างเดียว (read-only)
+เก็บ OS, โปรแกรม, และการตั้งค่าทุกอย่างที่จำเป็น
 
+Docker Container เปรียบเหมือน "ขนมที่พิมพ์ออกมาแล้ว" หรือ "อาหารที่ทำเสร็จแล้ว"
+คือ instance ที่รันจริงจาก Image สามารถเขียนข้อมูล แก้ไข และทำงานได้
+
+ตัวอย่าง:
+- Image: lthub/moodle:latest  → แม่พิมพ์ของ Moodle
+- Container: moodle_app       → Moodle ที่รันใช้งานจริง
+- Image: mariadb:latest       → แม่พิมพ์ของฐานข้อมูล
+- Container: moodle_db        → ฐานข้อมูลที่รันใช้งานจริง
+
+จาก 1 Image สามารถสร้างได้หลาย Container
 ```
 
 **2. จากสถาปัตยกรรมในการทดลอง มี Container กี่ตัว? แต่ละตัวมีหน้าที่อะไร?**
 
 คำตอบ:
 ```
+มี 2 Container:
 
+1. moodle_app (ใช้ image: lthub/moodle:latest)
+   - หน้าที่: รันเว็บ Moodle (Apache + PHP + Moodle)
+   - เปิด Port 8081 ให้ผู้ใช้เข้าผ่าน Browser
+   - เป็น Web Server ที่รับ request จากผู้ใช้
+
+2. moodle_db (ใช้ image: mariadb:latest)
+   - หน้าที่: เป็นฐานข้อมูล (Database Server)
+   - เก็บข้อมูลผู้ใช้ รายวิชา คะแนน ทุกอย่างของ Moodle
+   - เปิด Port 3306 ภายใน (ไม่เปิดออกภายนอก)
 ```
 
 **3. จากการทดลองมีการจัดการ Volume แบบใด มีข้อดีข้อเสียอย่างไร?**
 
 คำตอบ:
 ```
+ใช้ Named Volume (Docker จัดการให้) มี 2 Volume:
+- db_data      → เก็บข้อมูลฐานข้อมูล MariaDB (/var/lib/mysql)
+- moodledata   → เก็บไฟล์ที่ผู้ใช้อัปโหลด, cache, session (/moodledata)
 
+ข้อดี:
+- ข้อมูลไม่หายเมื่อลบ Container (docker-compose down)
+- Docker จัดการ path ให้อัตโนมัติ ไม่ต้องกำหนดเอง
+- สะดวก ย้ายเครื่องได้ง่าย
+
+ข้อเสีย:
+- หาไฟล์จริงบนเครื่อง Host ยากกว่า Bind Mount
+- ถ้าสั่ง docker-compose down -v จะลบ Volume ทิ้งทั้งหมด
+- Backup ต้องใช้คำสั่ง docker เพิ่มเติม
 ```
 
 **4. Network ใน Docker Compose ทำหน้าที่อะไร? Container สื่อสารกันอย่างไร?**
 
 คำตอบ:
 ```
+Network (moodle_network) ทำหน้าที่สร้าง "วงแลนส่วนตัว" ให้ Container ทั้งหมด
+เหมือนต่อสาย LAN ระหว่าง Container ให้คุยกันได้
 
+Container สื่อสารกันโดยใช้ชื่อ service แทน IP:
+- moodle_app จะเรียก database โดยใช้ชื่อ "db" (ไม่ต้องรู้ IP)
+- Docker จะแปลงชื่อ "db" เป็น IP ของ moodle_db ให้อัตโนมัติ (DNS)
 
+ใช้ driver: bridge ซึ่งเป็นแบบมาตรฐาน
+Container ภายนอก network นี้จะเข้าถึงไม่ได้ → ปลอดภัย
 ```
 
 
@@ -966,22 +1007,52 @@ docker exec -i moodle_db mysql -u moodleuser -pmoodlepassword moodle < backup_20
 
 คำตอบ:
 ```
+depends_on กำหนด "ลำดับการเริ่มต้น" ของ Container
 
+ในไฟล์ของเรา moodle มี depends_on: db หมายความว่า:
+- Docker จะเริ่ม Container db (MariaDB) ก่อนเสมอ
+- จากนั้นค่อยเริ่ม Container moodle
+
+สำคัญเพราะ: Moodle ต้องเชื่อมต่อฐานข้อมูลตอนเริ่มต้น
+ถ้า Database ยังไม่พร้อม Moodle จะ error ทันที
+
+หมายเหตุ: depends_on รอแค่ Container "เริ่ม" เท่านั้น
+ไม่ได้รอจน Database "พร้อมรับ connection" จริง ๆ
 ```
 
 **6. ถ้าต้องการเปลี่ยน Port ของ Moodle  เป็น 9000 ต้องแก้ไขส่วนใดของไฟล์?**
 
 คำตอบ:
 ```
+แก้ไข 2 จุดใน docker-compose.yml:
 
+1. แก้ ports ของ service moodle:
+   เปลี่ยนจาก:  "8081:80"
+   เป็น:        "9000:80"
+   (9000 คือ port ภายนอก, 80 คือ port ภายใน Container ไม่ต้องเปลี่ยน)
 
+2. แก้ MOODLE_URL:
+   เปลี่ยนจาก:  MOODLE_URL: http://localhost:8081
+   เป็น:        MOODLE_URL: http://localhost:9000
+
+จากนั้นรัน: docker-compose down && docker-compose up -d
+แล้วเข้าใช้งานผ่าน http://localhost:9000
 ```
 
 **7. Environment Variables `MOODLE_DB_HOST=db` หมายความว่าอย่างไร? ทำไมไม่ใช้ `localhost`?**
 
 คำตอบ:
 ```
+MOODLE_DB_HOST=db หมายความว่า:
+บอก Moodle ให้เชื่อมต่อฐานข้อมูลที่ชื่อ "db"
+ซึ่ง "db" คือชื่อ service ใน docker-compose.yml
 
+ทำไมไม่ใช้ localhost:
+- แต่ละ Container เหมือนคอมพิวเตอร์คนละเครื่อง
+- localhost ใน moodle_app หมายถึง "ตัว moodle_app เอง" ไม่ใช่ moodle_db
+- ต้องใช้ชื่อ service "db" เพื่อให้ Docker DNS แปลงเป็น IP ของ Container
+  ฐานข้อมูลให้อัตโนมัติ
+- เปรียบเหมือน: จะโทรหาเพื่อน ต้องกดเบอร์เพื่อน ไม่ใช่กดเบอร์ตัวเอง
 ```
 
 
@@ -989,17 +1060,41 @@ docker exec -i moodle_db mysql -u moodleuser -pmoodlepassword moodle < backup_20
 
 คำตอบ:
 ```
+การติดตั้งด้วย Docker:
+  ข้อดี:
+  - ติดตั้งเร็วมาก (แค่ docker-compose up -d)
+  - ไม่ต้องลง Apache, PHP, MariaDB เอง
+  - ย้ายเครื่อง/ทำซ้ำง่าย แค่ copy docker-compose.yml
+  - แต่ละ project แยกกันไม่กวน (isolation)
+  - ลบทิ้งสะอาด ไม่มีขยะค้าง
+  ข้อเสีย:
+  - ต้องเรียนรู้ Docker เพิ่ม
+  - กินทรัพยากรเครื่องมากกว่า (RAM, Disk)
+  - Debug ซับซ้อนกว่า ต้อง exec เข้า Container
 
+การติดตั้งแบบปกติ (ลงบน OS โดยตรง):
+  ข้อดี:
+  - Performance ดีกว่าเล็กน้อย
+  - แก้ไข config ง่ายกว่า เข้าถึงไฟล์ได้โดยตรง
+  - ไม่ต้องพึ่ง Docker
+  ข้อเสีย:
+  - ติดตั้งนาน ต้องลงทีละตัว (Apache, PHP, DB)
+  - เวอร์ชันชนกัน ถ้ามีหลาย project
+  - ย้ายเครื่องยาก ต้อง setup ใหม่ทั้งหมด
 ```
 
 **9. ถ้าต้องการเพิ่ม Container Redis สำหรับ Caching จะต้องแก้ไข docker-compose.yml อย่างไร?**
 
 คำตอบ (เขียน YAML):
 ```yaml
+  redis:
+    image: redis:latest
+    container_name: moodle_redis
+    networks:
+      - moodle_network
 
-
-
-
+  # แล้วเพิ่ม environment ใน service moodle:
+  # MOODLE_REDIS_HOST: redis
 
 
 
@@ -1012,18 +1107,37 @@ docker exec -i moodle_db mysql -u moodleuser -pmoodlepassword moodle < backup_20
 คำตอบ:
 ```
 วิธีตรวจสอบ:
-
+1. docker-compose ps              → ดูว่า Container ทั้งสองตัวรันอยู่ไหม
+2. docker-compose logs moodle     → ดู error log ของ Moodle
+3. docker-compose logs db         → ดู error log ของ Database
+4. docker exec moodle_app ping db → ทดสอบว่า moodle เห็น db ไหม
+5. docker network inspect moodle_network → ดูว่า Container อยู่ network เดียวกันไหม
 
 วิธีแก้ไข:
-
+1. ตรวจสอบ environment variables ว่า DB_HOST, DB_USER, DB_PASSWORD ถูกต้อง
+2. docker-compose restart db      → restart database ก่อน
+3. docker-compose restart moodle  → แล้ว restart moodle
+4. ถ้ายังไม่ได้: docker-compose down && docker-compose up -d → เริ่มใหม่ทั้งหมด
 ```
 
 **11. ถ้ารัน `docker-compose down -v` จะเกิดอะไรขึ้นกับข้อมูล?**
 
 คำตอบ:
 ```
+docker-compose down -v จะ:
+1. หยุด Container ทั้งหมด (moodle_app, moodle_db)
+2. ลบ Container ทั้งหมด
+3. ลบ Network (moodle_network)
+4. ลบ Volume ทั้งหมด (-v คือตัวร้าย!) ได้แก่:
+   - db_data     → ข้อมูลฐานข้อมูลหายหมด (ผู้ใช้, รายวิชา, คะแนน)
+   - moodledata  → ไฟล์ที่อัปโหลดหายหมด (เอกสาร, รูปภาพ)
 
+สรุป: ข้อมูลทุกอย่างหายหมด! เหมือน format เครื่องใหม่
+ดังนั้นต้อง backup ก่อนเสมอ!
 
+ถ้าอยากแค่หยุดโดยไม่ลบข้อมูล ให้ใช้:
+- docker-compose down    (ไม่มี -v) → เก็บ Volume ไว้
+- docker-compose stop    → แค่หยุด ไม่ลบอะไรเลย
 ```
 
 ---
